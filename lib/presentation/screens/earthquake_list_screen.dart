@@ -4,12 +4,15 @@ import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:timeago/timeago.dart' as timeago;
 
+import '../../app/theme/app_colors.dart';
+import '../../app/theme/design_tokens.dart';
 import '../../data/models/filter_options.dart';
 import '../../data/services/location_service.dart';
 import '../bloc/bloc_exports.dart';
 import '../widgets/earthquake_card.dart';
 import '../widgets/error_view.dart';
 import '../widgets/filter_sheet.dart';
+import '../widgets/skeleton_loading.dart';
 
 class EarthquakeListScreen extends StatefulWidget {
   const EarthquakeListScreen({super.key});
@@ -26,7 +29,6 @@ class _EarthquakeListScreenState extends State<EarthquakeListScreen> {
   }
 
   void _initializeWithLocation() {
-    // Initialize with auto-location detection
     context.read<EarthquakeBloc>().add(const InitializeWithLocation());
   }
 
@@ -41,74 +43,14 @@ class _EarthquakeListScreenState extends State<EarthquakeListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Earthquakes'),
-        actions: [
-          // Location mode toggle
-          BlocBuilder<EarthquakeBloc, EarthquakeState>(
-            builder: (context, state) {
-              return IconButton(
-                icon: Icon(
-                  state.isNearbyMode ? Icons.my_location : Icons.public,
-                  color: state.isNearbyMode
-                      ? Theme.of(context).colorScheme.primary
-                      : null,
-                ),
-                tooltip: state.isNearbyMode ? 'Nearby Mode' : 'Global Mode',
-                onPressed: () {
-                  if (state.isNearbyMode) {
-                    context.read<EarthquakeBloc>().add(const SwitchToGlobalMode());
-                  } else {
-                    context.read<EarthquakeBloc>().add(const SwitchToNearbyMode());
-                  }
-                },
-              );
-            },
-          ),
-          BlocBuilder<EarthquakeBloc, EarthquakeState>(
-            builder: (context, state) {
-              return IconButton(
-                icon: Icon(
-                  state.isAutoRefreshing ? Icons.sync : Icons.sync_disabled,
-                ),
-                tooltip: state.isAutoRefreshing
-                    ? 'Auto-refresh enabled'
-                    : 'Auto-refresh disabled',
-                onPressed: () {
-                  if (state.isAutoRefreshing) {
-                    context.read<EarthquakeBloc>().add(const StopAutoRefresh());
-                  } else {
-                    context.read<EarthquakeBloc>().add(const StartAutoRefresh());
-                  }
-                },
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.filter_list),
-            tooltip: 'Filter',
-            onPressed: () => _showFilterSheet(context),
-          ),
-          IconButton(
-            icon: const Icon(Icons.star_outline),
-            tooltip: 'Favorites',
-            onPressed: () => context.push('/favorites'),
-          ),
-          IconButton(
-            icon: const Icon(Icons.map_outlined),
-            tooltip: 'Map View',
-            onPressed: () => context.push('/map'),
-          ),
-        ],
-      ),
       body: BlocConsumer<EarthquakeBloc, EarthquakeState>(
         listener: (context, state) {
-          // Show error snackbar for location errors
           if (state.locationErrorMessage != null &&
               state.locationStatus != LocationPermissionStatus.granted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(state.locationErrorMessage!),
+                behavior: SnackBarBehavior.floating,
                 action: state.locationStatus ==
                         LocationPermissionStatus.deniedForever
                     ? SnackBarAction(
@@ -133,155 +75,153 @@ class _EarthquakeListScreenState extends State<EarthquakeListScreen> {
                     (s) => s.status != EarthquakeStatus.loading,
                   );
             },
-            child: _buildBody(context, state),
+            child: CustomScrollView(
+              slivers: [
+                // App Bar with collapsible title
+                _buildAppBar(context, state),
+                // Header with mode toggle and filters
+                SliverToBoxAdapter(
+                  child: _buildHeader(context, state),
+                ),
+                // Content
+                ..._buildContent(context, state),
+                // Bottom padding for navigation bar
+                SliverToBoxAdapter(
+                  child: SizedBox(height: AppSpacing.xl),
+                ),
+              ],
+            ),
           );
         },
       ),
     );
   }
 
-  Widget _buildBody(BuildContext context, EarthquakeState state) {
-    // Show loading for location
-    if (state.isLoadingLocation && state.earthquakes.isEmpty) {
-      return const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('Finding your location...'),
-          ],
+  Widget _buildAppBar(BuildContext context, EarthquakeState state) {
+    final theme = Theme.of(context);
+
+    return SliverAppBar(
+      expandedHeight: 100,
+      floating: true,
+      pinned: true,
+      stretch: true,
+      backgroundColor: theme.scaffoldBackgroundColor,
+      surfaceTintColor: Colors.transparent,
+      flexibleSpace: FlexibleSpaceBar(
+        titlePadding: EdgeInsets.only(
+          left: AppSpacing.lg,
+          bottom: AppSpacing.lg,
         ),
-      );
-    }
-
-    switch (state.status) {
-      case EarthquakeStatus.initial:
-      case EarthquakeStatus.loading:
-        if (state.earthquakes.isEmpty) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        return _buildList(context, state, isLoading: true);
-
-      case EarthquakeStatus.failure:
-        if (state.earthquakes.isEmpty) {
-          return ErrorView(
-            message: state.errorMessage ?? 'Failed to load earthquakes',
-            onRetry: state.isNearbyMode
-                ? () => context
-                    .read<EarthquakeBloc>()
-                    .add(const SwitchToNearbyMode())
-                : _loadGlobalEarthquakes,
-          );
-        }
-        return _buildList(context, state);
-
-      case EarthquakeStatus.success:
-        if (state.earthquakes.isEmpty) {
-          return EmptyView(
-            title: state.isNearbyMode
-                ? 'No Nearby Earthquakes'
-                : 'No Earthquakes Found',
-            subtitle: state.isNearbyMode
-                ? 'No seismic activity within ${state.searchRadius.toInt()} km of your location'
-                : 'Try adjusting your filters',
-            icon: Icons.public_off_outlined,
-          );
-        }
-        return _buildList(context, state);
-    }
-  }
-
-  Widget _buildList(
-      BuildContext context, EarthquakeState state, {bool isLoading = false}) {
-    return CustomScrollView(
-      slivers: [
-        SliverToBoxAdapter(
-          child: _buildHeader(context, state),
-        ),
-        if (isLoading)
-          const SliverToBoxAdapter(
-            child: LinearProgressIndicator(),
-          ),
-        SliverList(
-          delegate: SliverChildBuilderDelegate(
-            (context, index) {
-              final earthquake = state.earthquakes[index];
-              return EarthquakeCard(
-                earthquake: earthquake,
-                isSelected: state.selectedEarthquakeId == earthquake.id,
-                onTap: () => context.push('/detail/${earthquake.id}'),
-              );
-            },
-            childCount: state.earthquakes.length,
+        title: Text(
+          'Earthquakes',
+          style: theme.textTheme.headlineMedium?.copyWith(
+            fontWeight: FontWeight.w600,
           ),
         ),
-        const SliverToBoxAdapter(
-          child: SizedBox(height: 16),
+        expandedTitleScale: 1.2,
+      ),
+      actions: [
+        // Auto-refresh toggle
+        IconButton(
+          icon: Icon(
+            state.isAutoRefreshing
+                ? Icons.sync_rounded
+                : Icons.sync_disabled_rounded,
+            color: state.isAutoRefreshing
+                ? theme.colorScheme.primary
+                : theme.colorScheme.onSurfaceVariant,
+          ),
+          tooltip: state.isAutoRefreshing
+              ? 'Auto-refresh enabled'
+              : 'Auto-refresh disabled',
+          onPressed: () {
+            if (state.isAutoRefreshing) {
+              context.read<EarthquakeBloc>().add(const StopAutoRefresh());
+            } else {
+              context.read<EarthquakeBloc>().add(const StartAutoRefresh());
+            }
+          },
         ),
+        // Filter button
+        IconButton(
+          icon: const Icon(Icons.tune_rounded),
+          tooltip: 'Filter',
+          onPressed: () => _showFilterSheet(context),
+        ),
+        SizedBox(width: AppSpacing.sm),
       ],
     );
   }
 
   Widget _buildHeader(BuildContext context, EarthquakeState state) {
-    final theme = Theme.of(context);
-
     return Padding(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.symmetric(horizontal: AppSpacing.lg),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Location mode indicator
+          // Mode toggle segment
+          _buildModeToggle(context, state),
+          SizedBox(height: AppSpacing.lg),
+
+          // Location banner (nearby mode)
           if (state.isNearbyMode && state.hasUserLocation)
             _buildLocationBanner(context, state),
 
-          // Global mode with location error banner
+          // Location error banner
           if (!state.isNearbyMode &&
               state.locationStatus != LocationPermissionStatus.granted &&
               state.locationStatus != LocationPermissionStatus.unknown)
             _buildLocationErrorBanner(context, state),
 
-          // Filter chips (only show in global mode)
-          if (!state.isNearbyMode)
-            BlocBuilder<FilterCubit, FilterOptions>(
-              builder: (context, filters) {
-                return Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    Chip(
-                      avatar: const Icon(Icons.show_chart, size: 18),
-                      label: Text(filters.magnitude.label),
-                      visualDensity: VisualDensity.compact,
-                    ),
-                    Chip(
-                      avatar: const Icon(Icons.schedule, size: 18),
-                      label: Text(filters.period.label),
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  ],
-                );
+          // Filter chips (global mode)
+          if (!state.isNearbyMode) ...[
+            _buildFilterChips(context),
+            SizedBox(height: AppSpacing.md),
+          ],
+
+          // Stats row
+          _buildStatsRow(context, state),
+          SizedBox(height: AppSpacing.md),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildModeToggle(BuildContext context, EarthquakeState state) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Container(
+      padding: EdgeInsets.all(AppSpacing.xs),
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.gray800 : AppColors.gray100,
+        borderRadius: AppRadius.borderRadiusMd,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _ModeButton(
+              icon: Icons.public_rounded,
+              label: 'Global',
+              isSelected: !state.isNearbyMode,
+              onTap: () {
+                if (state.isNearbyMode) {
+                  context.read<EarthquakeBloc>().add(const SwitchToGlobalMode());
+                }
               },
             ),
-
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Text(
-                '${state.metadata?.count ?? state.earthquakes.length} earthquakes',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const Spacer(),
-              if (state.lastUpdated != null)
-                Text(
-                  'Updated ${timeago.format(state.lastUpdated!)}',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-            ],
+          ),
+          Expanded(
+            child: _ModeButton(
+              icon: Icons.my_location_rounded,
+              label: 'Nearby',
+              isSelected: state.isNearbyMode,
+              onTap: () {
+                if (!state.isNearbyMode) {
+                  context.read<EarthquakeBloc>().add(const SwitchToNearbyMode());
+                }
+              },
+            ),
           ),
         ],
       ),
@@ -290,38 +230,47 @@ class _EarthquakeListScreenState extends State<EarthquakeListScreen> {
 
   Widget _buildLocationBanner(BuildContext context, EarthquakeState state) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
+      margin: EdgeInsets.only(bottom: AppSpacing.md),
+      padding: EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
-        color: theme.colorScheme.primaryContainer.withAlpha((0.3 * 255).round()),
-        borderRadius: BorderRadius.circular(12),
+        color: isDark
+            ? AppColors.primary900.withAlpha((0.3 * 255).round())
+            : AppColors.primary50,
+        borderRadius: AppRadius.borderRadiusMd,
         border: Border.all(
-          color: theme.colorScheme.primary.withAlpha((0.3 * 255).round()),
+          color: theme.colorScheme.primary.withAlpha((0.2 * 255).round()),
         ),
       ),
       child: Row(
         children: [
-          Icon(
-            Icons.my_location,
-            color: theme.colorScheme.primary,
-            size: 20,
+          Container(
+            padding: EdgeInsets.all(AppSpacing.sm),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primary.withAlpha((0.1 * 255).round()),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.my_location_rounded,
+              color: theme.colorScheme.primary,
+              size: AppIconSize.md,
+            ),
           ),
-          const SizedBox(width: 12),
+          SizedBox(width: AppSpacing.md),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Nearby Mode',
+                  'Searching nearby',
                   style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 Text(
-                  '${state.userLatitude?.toStringAsFixed(2)}°N, ${state.userLongitude?.toStringAsFixed(2)}°E • ${state.searchRadius.toInt()} km radius',
+                  '${state.searchRadius.toInt()} km radius',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
@@ -329,10 +278,9 @@ class _EarthquakeListScreenState extends State<EarthquakeListScreen> {
               ],
             ),
           ),
-          // Radius adjustment button
           PopupMenuButton<double>(
             icon: Icon(
-              Icons.tune,
+              Icons.expand_more_rounded,
               color: theme.colorScheme.primary,
             ),
             tooltip: 'Adjust radius',
@@ -355,27 +303,33 @@ class _EarthquakeListScreenState extends State<EarthquakeListScreen> {
   Widget _buildLocationErrorBanner(
       BuildContext context, EarthquakeState state) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
+      margin: EdgeInsets.only(bottom: AppSpacing.md),
+      padding: EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
       decoration: BoxDecoration(
-        color: theme.colorScheme.errorContainer.withAlpha((0.3 * 255).round()),
-        borderRadius: BorderRadius.circular(12),
+        color: isDark
+            ? AppColors.warning.withAlpha((0.15 * 255).round())
+            : AppColors.warningLight,
+        borderRadius: AppRadius.borderRadiusSm,
       ),
       child: Row(
         children: [
           Icon(
-            Icons.location_off,
-            color: theme.colorScheme.error,
-            size: 20,
+            Icons.location_off_rounded,
+            color: AppColors.warning,
+            size: AppIconSize.sm,
           ),
-          const SizedBox(width: 12),
+          SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Text(
-              'Location unavailable • Showing global earthquakes',
+              'Location unavailable',
               style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onErrorContainer,
+                color: isDark ? AppColors.warning : AppColors.gray700,
               ),
             ),
           ),
@@ -390,6 +344,11 @@ class _EarthquakeListScreenState extends State<EarthquakeListScreen> {
                     .add(const RequestLocationPermission());
               }
             },
+            style: TextButton.styleFrom(
+              padding: EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
             child: Text(
               state.locationStatus == LocationPermissionStatus.deniedForever
                   ? 'Settings'
@@ -399,6 +358,142 @@ class _EarthquakeListScreenState extends State<EarthquakeListScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildFilterChips(BuildContext context) {
+    return BlocBuilder<FilterCubit, FilterOptions>(
+      builder: (context, filters) {
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              _FilterChip(
+                icon: Icons.speed_rounded,
+                label: filters.magnitude.label,
+                onTap: () => _showFilterSheet(context),
+              ),
+              SizedBox(width: AppSpacing.sm),
+              _FilterChip(
+                icon: Icons.schedule_rounded,
+                label: filters.period.label,
+                onTap: () => _showFilterSheet(context),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildStatsRow(BuildContext context, EarthquakeState state) {
+    final theme = Theme.of(context);
+
+    return Row(
+      children: [
+        Text(
+          '${state.metadata?.count ?? state.earthquakes.length} earthquakes',
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const Spacer(),
+        if (state.lastUpdated != null)
+          Text(
+            timeago.format(state.lastUpdated!),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+      ],
+    );
+  }
+
+  List<Widget> _buildContent(BuildContext context, EarthquakeState state) {
+    // Loading state with skeleton
+    if (state.isLoadingLocation && state.earthquakes.isEmpty) {
+      return [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.only(top: AppSpacing.xxl),
+            child: const LoadingView(message: 'Finding your location...'),
+          ),
+        ),
+      ];
+    }
+
+    switch (state.status) {
+      case EarthquakeStatus.initial:
+      case EarthquakeStatus.loading:
+        if (state.earthquakes.isEmpty) {
+          return [
+            SliverToBoxAdapter(
+              child: SizedBox(
+                height: 400,
+                child: const SkeletonList(itemCount: 5),
+              ),
+            ),
+          ];
+        }
+        return _buildEarthquakeList(context, state, isLoading: true);
+
+      case EarthquakeStatus.failure:
+        if (state.earthquakes.isEmpty) {
+          return [
+            SliverFillRemaining(
+              child: ErrorView(
+                message: state.errorMessage ?? 'Failed to load earthquakes',
+                onRetry: state.isNearbyMode
+                    ? () => context
+                        .read<EarthquakeBloc>()
+                        .add(const SwitchToNearbyMode())
+                    : _loadGlobalEarthquakes,
+              ),
+            ),
+          ];
+        }
+        return _buildEarthquakeList(context, state);
+
+      case EarthquakeStatus.success:
+        if (state.earthquakes.isEmpty) {
+          return [
+            SliverFillRemaining(
+              child: EmptyView.noEarthquakes(
+                subtitle: state.isNearbyMode
+                    ? 'No seismic activity within ${state.searchRadius.toInt()} km'
+                    : null,
+              ),
+            ),
+          ];
+        }
+        return _buildEarthquakeList(context, state);
+    }
+  }
+
+  List<Widget> _buildEarthquakeList(
+    BuildContext context,
+    EarthquakeState state, {
+    bool isLoading = false,
+  }) {
+    return [
+      if (isLoading)
+        const SliverToBoxAdapter(
+          child: LinearProgressIndicator(),
+        ),
+      SliverList(
+        delegate: SliverChildBuilderDelegate(
+          (context, index) {
+            final earthquake = state.earthquakes[index];
+            return EarthquakeCard(
+              earthquake: earthquake,
+              isSelected: state.selectedEarthquakeId == earthquake.id,
+              onTap: () => context.push('/detail/${earthquake.id}'),
+              animationIndex: index,
+            );
+          },
+          childCount: state.earthquakes.length,
+        ),
+      ),
+    ];
   }
 
   void _showFilterSheet(BuildContext context) {
@@ -411,6 +506,126 @@ class _EarthquakeListScreenState extends State<EarthquakeListScreen> {
         child: BlocProvider.value(
           value: context.read<EarthquakeBloc>(),
           child: const FilterSheet(),
+        ),
+      ),
+    );
+  }
+}
+
+/// Mode toggle button widget.
+class _ModeButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _ModeButton({
+    required this.icon,
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: AppDurations.fast,
+        curve: AppCurves.standard,
+        padding: EdgeInsets.symmetric(
+          vertical: AppSpacing.sm,
+          horizontal: AppSpacing.md,
+        ),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? (isDark ? AppColors.primary800 : Colors.white)
+              : Colors.transparent,
+          borderRadius: AppRadius.borderRadiusSm,
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: AppColors.gray900.withAlpha(isDark ? 30 : 10),
+                    blurRadius: 4,
+                    offset: const Offset(0, 1),
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: AppIconSize.sm,
+              color: isSelected
+                  ? theme.colorScheme.primary
+                  : theme.colorScheme.onSurfaceVariant,
+            ),
+            SizedBox(width: AppSpacing.sm),
+            Text(
+              label,
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: isSelected
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.onSurfaceVariant,
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Filter chip widget.
+class _FilterChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _FilterChip({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: AppSpacing.md,
+          vertical: AppSpacing.sm,
+        ),
+        decoration: BoxDecoration(
+          color: isDark ? AppColors.gray800 : AppColors.gray100,
+          borderRadius: AppRadius.borderRadiusSm,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: AppIconSize.sm,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            SizedBox(width: AppSpacing.xs),
+            Text(
+              label,
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.onSurface,
+              ),
+            ),
+          ],
         ),
       ),
     );

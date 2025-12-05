@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -5,10 +7,17 @@ import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../app/theme/app_colors.dart';
+import '../../app/theme/design_tokens.dart';
+import '../../core/config/map_config.dart';
 import '../../core/utils/earthquake_utils.dart';
 import '../../data/models/earthquake.dart';
+import '../animations/animation_utils.dart';
 import '../bloc/bloc_exports.dart';
 import '../widgets/error_view.dart';
+import '../widgets/magnitude_badge.dart';
+import '../widgets/stat_card.dart';
+import '../widgets/skeleton_loading.dart';
 
 class EarthquakeDetailScreen extends StatefulWidget {
   final String earthquakeId;
@@ -50,7 +59,7 @@ class _EarthquakeDetailScreenState extends State<EarthquakeDetailScreen> {
 
           if (earthquake == null) {
             if (state.status == EarthquakeStatus.loading) {
-              return const Center(child: CircularProgressIndicator());
+              return const _DetailSkeleton();
             }
             return Scaffold(
               appBar: AppBar(),
@@ -76,42 +85,73 @@ class _DetailContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final props = earthquake.properties;
     final mag = props.mag ?? 0;
-    final magColor = EarthquakeUtils.getMagnitudeColor(mag);
 
     return CustomScrollView(
       slivers: [
+        // Map with floating back button
         SliverAppBar(
-          expandedHeight: 250,
+          expandedHeight: 280,
           pinned: true,
+          stretch: true,
+          backgroundColor: isDark ? AppColors.surfaceDark : Colors.white,
+          leading: Padding(
+            padding: EdgeInsets.all(AppSpacing.sm),
+            child: _FloatingBackButton(),
+          ),
+          actions: [
+            Padding(
+              padding: EdgeInsets.only(right: AppSpacing.sm),
+              child: _FloatingActionButton(
+                icon: Icons.share_rounded,
+                onPressed: () => _shareEarthquake(context),
+              ),
+            ),
+          ],
           flexibleSpace: FlexibleSpaceBar(
             background: _buildMap(context),
           ),
         ),
+
+        // Content with overlapping magnitude badge
         SliverToBoxAdapter(
           child: Transform.translate(
-            offset: const Offset(0, -20),
-            child: Container(
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surface,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildHeader(context, magColor),
-                  const Divider(height: 32),
-                  _buildInfoSection(context),
-                  const Divider(height: 32),
-                  _buildStatsSection(context),
-                  if (props.url != null) ...[
-                    const Divider(height: 32),
-                    _buildActionsSection(context),
-                  ],
-                  const SizedBox(height: 32),
-                ],
-              ),
+            offset: const Offset(0, -40),
+            child: Column(
+              children: [
+                // Floating magnitude badge with Hero
+                Hero(
+                  tag: 'magnitude_${earthquake.id}',
+                  child: LargeMagnitudeBadge(
+                    magnitude: mag,
+                  ),
+                ),
+                SizedBox(height: AppSpacing.lg),
+
+                // Content sections
+                Container(
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surface,
+                    borderRadius: AppRadius.borderRadiusTopXl,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(height: AppSpacing.xl),
+                      _buildHeader(context),
+                      SizedBox(height: AppSpacing.xxl),
+                      _buildLocationTimeSection(context),
+                      SizedBox(height: AppSpacing.xxl),
+                      _buildStatsSection(context),
+                      SizedBox(height: AppSpacing.xxl),
+                      _buildActionsSection(context),
+                      SizedBox(height: AppSpacing.xxl + MediaQuery.of(context).padding.bottom),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -120,239 +160,285 @@ class _DetailContent extends StatelessWidget {
   }
 
   Widget _buildMap(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final magColor = EarthquakeUtils.getMagnitudeColor(earthquake.properties.mag);
+    // Use CARTO maps
+    final mapStyle = isDark
+        ? MapConfig.styles[MapStyle.cartoDarkMatter]!
+        : MapConfig.styles[MapStyle.cartoPositron]!;
 
-    return FlutterMap(
-      options: MapOptions(
-        initialCenter: LatLng(earthquake.latitude, earthquake.longitude),
-        initialZoom: 6,
-        interactionOptions: const InteractionOptions(
-          flags: InteractiveFlag.none,
-        ),
-      ),
+    return Stack(
       children: [
-        TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'com.example.earthquakes',
-        ),
-        MarkerLayer(
-          markers: [
-            Marker(
-              point: LatLng(earthquake.latitude, earthquake.longitude),
-              width: 48,
-              height: 48,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: magColor.withAlpha((0.3 * 255).round()),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: magColor, width: 3),
-                ),
-                child: Center(
+        FlutterMap(
+          options: MapOptions(
+            initialCenter: LatLng(earthquake.latitude, earthquake.longitude),
+            initialZoom: 7,
+            interactionOptions: const InteractionOptions(
+              flags: InteractiveFlag.none,
+            ),
+          ),
+          children: [
+            TileLayer(
+              urlTemplate: mapStyle.getUrl(retina: mapStyle.supportsRetina),
+              subdomains: mapStyle.subdomains,
+              userAgentPackageName: 'com.example.earthquakes',
+            ),
+            MarkerLayer(
+              markers: [
+                Marker(
+                  point: LatLng(earthquake.latitude, earthquake.longitude),
+                  width: 56,
+                  height: 56,
                   child: Container(
-                    width: 16,
-                    height: 16,
                     decoration: BoxDecoration(
-                      color: magColor,
+                      color: magColor.withAlpha((0.3 * 255).round()),
                       shape: BoxShape.circle,
+                      border: Border.all(color: magColor, width: 3),
+                      boxShadow: [
+                        BoxShadow(
+                          color: magColor.withAlpha((0.4 * 255).round()),
+                          blurRadius: 12,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Container(
+                        width: 20,
+                        height: 20,
+                        decoration: BoxDecoration(
+                          color: magColor,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
+              ],
             ),
           ],
+        ),
+        // Gradient overlay at bottom
+        Positioned(
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: 80,
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.transparent,
+                  theme.colorScheme.surface.withAlpha((0.8 * 255).round()),
+                ],
+              ),
+            ),
+          ),
         ),
       ],
     );
   }
 
-  Widget _buildHeader(BuildContext context, Color magColor) {
+  Widget _buildHeader(BuildContext context) {
     final theme = Theme.of(context);
     final props = earthquake.properties;
+    final magColor = EarthquakeUtils.getMagnitudeColor(props.mag);
 
-    return Padding(
-      padding: const EdgeInsets.all(20),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 72,
-            height: 72,
-            decoration: BoxDecoration(
-              color: magColor.withAlpha((0.15 * 255).round()),
-              shape: BoxShape.circle,
-              border: Border.all(color: magColor, width: 3),
+    return SlideUpFadeIn(
+      delay: const Duration(milliseconds: 100),
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Location
+            Text(
+              props.place ?? 'Unknown Location',
+              style: theme.textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+              textAlign: TextAlign.center,
             ),
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    (props.mag ?? 0).toStringAsFixed(1),
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: magColor,
-                    ),
-                  ),
-                  Text(
-                    props.magType?.toUpperCase() ?? '',
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: magColor,
-                    ),
-                  ),
-                ],
+            SizedBox(height: AppSpacing.sm),
+            // Magnitude class
+            Text(
+              earthquake.magnitudeClass,
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: magColor,
+                fontWeight: FontWeight.w600,
               ),
             ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            SizedBox(height: AppSpacing.md),
+            // Badges row
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(
-                  props.place ?? 'Unknown Location',
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
+                if (earthquake.hasTsunamiWarning) ...[
+                  _InfoBadge(
+                    icon: Icons.waves_rounded,
+                    label: 'Tsunami Warning',
+                    color: EarthquakeUtils.tsunamiColor,
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  earthquake.magnitudeClass,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: magColor,
-                    fontWeight: FontWeight.w600,
+                  SizedBox(width: AppSpacing.sm),
+                ],
+                if (props.alert != null)
+                  _InfoBadge(
+                    icon: Icons.warning_amber_rounded,
+                    label: '${props.alert!.toUpperCase()} Alert',
+                    color: EarthquakeUtils.getAlertColor(props.alert),
                   ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    if (earthquake.hasTsunamiWarning) ...[
-                      _Badge(
-                        icon: Icons.waves,
-                        label: 'Tsunami',
-                        color: Colors.blue,
-                      ),
-                      const SizedBox(width: 8),
-                    ],
-                    if (props.alert != null)
-                      _Badge(
-                        icon: Icons.warning_amber,
-                        label: props.alert!.toUpperCase(),
-                        color: EarthquakeUtils.getAlertColor(props.alert),
-                      ),
-                  ],
-                ),
               ],
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildInfoSection(BuildContext context) {
+  Widget _buildLocationTimeSection(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final dateFormat = DateFormat('EEEE, MMMM d, yyyy');
     final timeFormat = DateFormat('HH:mm:ss');
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Location & Time',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.bold,
+    return SlideUpFadeIn(
+      delay: const Duration(milliseconds: 200),
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _SectionHeader(
+              title: 'Location & Time',
+              icon: Icons.schedule_rounded,
             ),
-          ),
-          const SizedBox(height: 16),
-          _InfoRow(
-            icon: Icons.calendar_today,
-            label: 'Date',
-            value: dateFormat.format(earthquake.time.toLocal()),
-          ),
-          _InfoRow(
-            icon: Icons.access_time,
-            label: 'Time (Local)',
-            value: timeFormat.format(earthquake.time.toLocal()),
-          ),
-          _InfoRow(
-            icon: Icons.location_on,
-            label: 'Coordinates',
-            value: EarthquakeUtils.formatCoordinates(
-              earthquake.latitude,
-              earthquake.longitude,
+            SizedBox(height: AppSpacing.lg),
+            // Glass card for location info
+            Container(
+              padding: EdgeInsets.all(AppSpacing.lg),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? AppColors.gray800.withAlpha((0.5 * 255).round())
+                    : AppColors.gray50,
+                borderRadius: AppRadius.borderRadiusMd,
+                border: Border.all(
+                  color: isDark
+                      ? AppColors.gray700.withAlpha((0.3 * 255).round())
+                      : AppColors.gray200.withAlpha((0.5 * 255).round()),
+                ),
+              ),
+              child: Column(
+                children: [
+                  _DetailRow(
+                    icon: Icons.calendar_today_rounded,
+                    label: 'Date',
+                    value: dateFormat.format(earthquake.time.toLocal()),
+                  ),
+                  SizedBox(height: AppSpacing.md),
+                  _DetailRow(
+                    icon: Icons.access_time_rounded,
+                    label: 'Local Time',
+                    value: timeFormat.format(earthquake.time.toLocal()),
+                  ),
+                  SizedBox(height: AppSpacing.md),
+                  _DetailRow(
+                    icon: Icons.my_location_rounded,
+                    label: 'Coordinates',
+                    value: EarthquakeUtils.formatCoordinates(
+                      earthquake.latitude,
+                      earthquake.longitude,
+                    ),
+                  ),
+                  SizedBox(height: AppSpacing.md),
+                  _DetailRow(
+                    icon: Icons.vertical_align_bottom_rounded,
+                    label: 'Depth',
+                    value: EarthquakeUtils.formatDepth(earthquake.depth),
+                    isLast: true,
+                  ),
+                ],
+              ),
             ),
-          ),
-          _InfoRow(
-            icon: Icons.arrow_downward,
-            label: 'Depth',
-            value: EarthquakeUtils.formatDepth(earthquake.depth),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildStatsSection(BuildContext context) {
-    final theme = Theme.of(context);
     final props = earthquake.properties;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Technical Details',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.bold,
+    // Build stats list dynamically
+    final stats = <Map<String, dynamic>>[
+      {
+        'label': 'Significance',
+        'value': '${props.sig ?? 0}',
+        'icon': Icons.priority_high_rounded,
+      },
+      {
+        'label': 'Felt Reports',
+        'value': '${props.felt ?? 0}',
+        'icon': Icons.people_rounded,
+      },
+    ];
+
+    if (props.cdi != null) {
+      stats.add({
+        'label': 'CDI',
+        'value': props.cdi!.toStringAsFixed(1),
+        'icon': Icons.assessment_rounded,
+      });
+    }
+
+    if (props.mmi != null) {
+      stats.add({
+        'label': 'MMI',
+        'value': props.mmi!.toStringAsFixed(1),
+        'icon': Icons.show_chart_rounded,
+      });
+    }
+
+    if (props.nst != null) {
+      stats.add({
+        'label': 'Stations',
+        'value': '${props.nst}',
+        'icon': Icons.sensors_rounded,
+      });
+    }
+
+    if (props.gap != null) {
+      stats.add({
+        'label': 'Gap',
+        'value': '${props.gap!.toStringAsFixed(0)}°',
+        'icon': Icons.pie_chart_rounded,
+      });
+    }
+
+    return SlideUpFadeIn(
+      delay: const Duration(milliseconds: 300),
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _SectionHeader(
+              title: 'Technical Details',
+              icon: Icons.analytics_rounded,
             ),
-          ),
-          const SizedBox(height: 16),
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: [
-              _StatCard(
-                label: 'Significance',
-                value: '${props.sig ?? 0}',
-                icon: Icons.priority_high,
-              ),
-              _StatCard(
-                label: 'Felt Reports',
-                value: '${props.felt ?? 0}',
-                icon: Icons.people,
-              ),
-              if (props.cdi != null)
-                _StatCard(
-                  label: 'CDI',
-                  value: props.cdi!.toStringAsFixed(1),
-                  icon: Icons.assessment,
-                ),
-              if (props.mmi != null)
-                _StatCard(
-                  label: 'MMI',
-                  value: props.mmi!.toStringAsFixed(1),
-                  icon: Icons.show_chart,
-                ),
-              if (props.nst != null)
-                _StatCard(
-                  label: 'Stations',
-                  value: '${props.nst}',
-                  icon: Icons.sensors,
-                ),
-              if (props.gap != null)
-                _StatCard(
-                  label: 'Gap',
-                  value: '${props.gap!.toStringAsFixed(0)}°',
-                  icon: Icons.pie_chart,
-                ),
-            ],
-          ),
-        ],
+            SizedBox(height: AppSpacing.lg),
+            // 2x2 Stats grid
+            StatsGrid(
+              stats: stats.map((stat) => StatCardData(
+                label: stat['label'] as String,
+                value: stat['value'] as String,
+                icon: stat['icon'] as IconData,
+              )).toList(),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -360,19 +446,52 @@ class _DetailContent extends StatelessWidget {
   Widget _buildActionsSection(BuildContext context) {
     final props = earthquake.properties;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          FilledButton.icon(
-            onPressed: () => _openUsgsPage(props.url!),
-            icon: const Icon(Icons.open_in_new),
-            label: const Text('View on USGS'),
-          ),
-        ],
+    return SlideUpFadeIn(
+      delay: const Duration(milliseconds: 400),
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _SectionHeader(
+              title: 'Actions',
+              icon: Icons.touch_app_rounded,
+            ),
+            SizedBox(height: AppSpacing.lg),
+            // Action buttons row
+            Row(
+              children: [
+                if (props.url != null)
+                  Expanded(
+                    child: _ActionButton(
+                      icon: Icons.open_in_new_rounded,
+                      label: 'USGS Page',
+                      onPressed: () => _openUsgsPage(props.url!),
+                      isPrimary: true,
+                    ),
+                  ),
+                if (props.url != null) SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: _ActionButton(
+                    icon: Icons.map_rounded,
+                    label: 'Full Map',
+                    onPressed: () => _openFullMap(context),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
+  }
+
+  void _shareEarthquake(BuildContext context) {
+    // Would implement share functionality here using Share plugin
+  }
+
+  void _openFullMap(BuildContext context) {
+    // Navigate to full map with this earthquake selected
   }
 
   Future<void> _openUsgsPage(String url) async {
@@ -383,12 +502,175 @@ class _DetailContent extends StatelessWidget {
   }
 }
 
-class _Badge extends StatelessWidget {
+/// Floating back button with blur effect.
+class _FloatingBackButton extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return ClipOval(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: isDark
+                ? AppColors.gray900.withAlpha((0.6 * 255).round())
+                : Colors.white.withAlpha((0.8 * 255).round()),
+            shape: BoxShape.circle,
+          ),
+          child: IconButton(
+            icon: Icon(
+              Icons.arrow_back_rounded,
+              size: AppIconSize.md,
+            ),
+            onPressed: () => Navigator.of(context).pop(),
+            padding: EdgeInsets.zero,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Floating action button with blur effect.
+class _FloatingActionButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  const _FloatingActionButton({
+    required this.icon,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return ClipOval(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: isDark
+                ? AppColors.gray900.withAlpha((0.6 * 255).round())
+                : Colors.white.withAlpha((0.8 * 255).round()),
+            shape: BoxShape.circle,
+          ),
+          child: IconButton(
+            icon: Icon(icon, size: AppIconSize.md),
+            onPressed: onPressed,
+            padding: EdgeInsets.zero,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Section header with icon.
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  final IconData icon;
+
+  const _SectionHeader({
+    required this.title,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Row(
+      children: [
+        Icon(
+          icon,
+          size: AppIconSize.sm,
+          color: theme.colorScheme.primary,
+        ),
+        SizedBox(width: AppSpacing.sm),
+        Text(
+          title,
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Detail row for location/time info.
+class _DetailRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final bool isLast;
+
+  const _DetailRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.isLast = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Row(
+      children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: theme.colorScheme.primary.withAlpha((0.1 * 255).round()),
+            borderRadius: AppRadius.borderRadiusSm,
+          ),
+          child: Icon(
+            icon,
+            size: AppIconSize.sm,
+            color: theme.colorScheme.primary,
+          ),
+        ),
+        SizedBox(width: AppSpacing.md),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              Text(
+                value,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Info badge for alerts and warnings.
+class _InfoBadge extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color color;
 
-  const _Badge({
+  const _InfoBadge({
     required this.icon,
     required this.label,
     required this.color,
@@ -397,22 +679,27 @@ class _Badge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
       decoration: BoxDecoration(
-        color: color.withAlpha((0.15 * 255).round()),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withAlpha((0.5 * 255).round())),
+        color: color.withAlpha((0.12 * 255).round()),
+        borderRadius: AppRadius.borderRadiusSm,
+        border: Border.all(
+          color: color.withAlpha((0.3 * 255).round()),
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: color),
-          const SizedBox(width: 4),
+          Icon(icon, size: AppIconSize.xs, color: color),
+          SizedBox(width: AppSpacing.xs),
           Text(
             label,
             style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
               color: color,
             ),
           ),
@@ -422,95 +709,154 @@ class _Badge extends StatelessWidget {
   }
 }
 
-class _InfoRow extends StatelessWidget {
+/// Action button with optional primary styling.
+class _ActionButton extends StatelessWidget {
   final IconData icon;
   final String label;
-  final String value;
+  final VoidCallback onPressed;
+  final bool isPrimary;
 
-  const _InfoRow({
+  const _ActionButton({
     required this.icon,
     required this.label,
-    required this.value,
+    required this.onPressed,
+    this.isPrimary = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    if (isPrimary) {
+      return FilledButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon, size: AppIconSize.sm),
+        label: Text(label),
+        style: FilledButton.styleFrom(
+          padding: EdgeInsets.symmetric(
+            horizontal: AppSpacing.lg,
+            vertical: AppSpacing.md,
+          ),
+        ),
+      );
+    }
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        children: [
-          Icon(
-            icon,
-            size: 20,
-            color: theme.colorScheme.primary,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                Text(
-                  value,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon, size: AppIconSize.sm),
+      label: Text(label),
+      style: OutlinedButton.styleFrom(
+        padding: EdgeInsets.symmetric(
+          horizontal: AppSpacing.lg,
+          vertical: AppSpacing.md,
+        ),
       ),
     );
   }
 }
 
-class _StatCard extends StatelessWidget {
-  final String label;
-  final String value;
-  final IconData icon;
-
-  const _StatCard({
-    required this.label,
-    required this.value,
-    required this.icon,
-  });
+/// Skeleton loading for detail screen.
+class _DetailSkeleton extends StatelessWidget {
+  const _DetailSkeleton();
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withAlpha((0.5 * 255).round()),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        children: [
-          Icon(
-            icon,
-            size: 20,
-            color: theme.colorScheme.primary,
-          ),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.bold,
+    return Scaffold(
+      body: CustomScrollView(
+        slivers: [
+          SliverAppBar(
+            expandedHeight: 280,
+            pinned: true,
+            flexibleSpace: FlexibleSpaceBar(
+              background: ShimmerEffect(
+                child: Container(
+                  color: isDark ? AppColors.gray800 : AppColors.gray200,
+                ),
+              ),
             ),
           ),
-          Text(
-            label,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
+          SliverToBoxAdapter(
+            child: Transform.translate(
+              offset: const Offset(0, -40),
+              child: Column(
+                children: [
+                  // Badge skeleton
+                  ShimmerEffect(
+                    child: Container(
+                      width: 100,
+                      height: 100,
+                      decoration: BoxDecoration(
+                        color: isDark ? AppColors.gray800 : AppColors.gray200,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+                  SizedBox(height: AppSpacing.xl),
+                  Container(
+                    padding: EdgeInsets.all(AppSpacing.xl),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surface,
+                      borderRadius: AppRadius.borderRadiusTopXl,
+                    ),
+                    child: Column(
+                      children: [
+                        // Title skeleton
+                        ShimmerEffect(
+                          child: Container(
+                            width: 200,
+                            height: 24,
+                            decoration: BoxDecoration(
+                              color: isDark ? AppColors.gray800 : AppColors.gray200,
+                              borderRadius: AppRadius.borderRadiusSm,
+                            ),
+                          ),
+                        ),
+                        SizedBox(height: AppSpacing.xxl),
+                        // Info card skeleton
+                        ShimmerEffect(
+                          child: Container(
+                            height: 200,
+                            decoration: BoxDecoration(
+                              color: isDark ? AppColors.gray800 : AppColors.gray200,
+                              borderRadius: AppRadius.borderRadiusMd,
+                            ),
+                          ),
+                        ),
+                        SizedBox(height: AppSpacing.xxl),
+                        // Stats grid skeleton
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ShimmerEffect(
+                                child: Container(
+                                  height: 100,
+                                  decoration: BoxDecoration(
+                                    color: isDark ? AppColors.gray800 : AppColors.gray200,
+                                    borderRadius: AppRadius.borderRadiusMd,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            SizedBox(width: AppSpacing.md),
+                            Expanded(
+                              child: ShimmerEffect(
+                                child: Container(
+                                  height: 100,
+                                  decoration: BoxDecoration(
+                                    color: isDark ? AppColors.gray800 : AppColors.gray200,
+                                    borderRadius: AppRadius.borderRadiusMd,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],

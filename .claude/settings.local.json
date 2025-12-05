@@ -4,7 +4,14 @@
       "Bash(flutter pub get:*)",
       "Bash(dart run build_runner:*)",
       "Bash(flutter analyze:*)",
-      "Bash(flutter build:*)"
+      "Bash(flutter build:*)",
+      "WebSearch",
+      "WebFetch(domain:intersec.com)",
+      "WebFetch(domain:www.interaction-design.org)",
+      "WebFetch(domain:docs.fleaflet.dev)",
+      "WebFetch(domain:stadiamaps.com)",
+      "WebFetch(domain:carto.com)",
+      "WebFetch(domain:openfreemap.org)"
     ],
     "deny": [],
     "ask": []
